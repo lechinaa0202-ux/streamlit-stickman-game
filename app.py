@@ -11,20 +11,55 @@ game_html = """
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body { text-align: center; font-family: Arial, sans-serif; background-color: #111; color: white; margin: 0; padding: 0; }
-        canvas { background: #222; border: 3px solid #555; display: block; margin: 10px auto; max-width: 100%; touch-action: none; }
+        body { text-align: center; font-family: Arial, sans-serif; background-color: #111; color: white; margin: 0; padding: 0; overflow: hidden; }
+        #game-arena { background: #222; border: 3px solid #555; width: 360px; height: 260px; margin: 10px auto; position: relative; overflow: hidden; }
         .controls { display: grid; grid-template-columns: repeat(3, 65px); grid-gap: 12px; justify-content: center; margin-top: 15px; }
         .btn { width: 65px; height: 65px; background: #444; color: white; border: none; border-radius: 12px; font-size: 22px; font-weight: bold; }
         .btn:active { background: #666; }
         .empty { visibility: hidden; }
         #score-board { font-size: 18px; margin: 5px; color: #ffeb3b; font-weight: bold; }
+        
+        /* Thực thể Game */
+        .entity { position: absolute; font-size: 28px; width: 30px; height: 35px; transition: all 0.1s linear; }
+        .hp-bar-bg { position: absolute; width: 30px; height: 4px; background: red; top: -8px; left: 0; }
+        .hp-bar-fill { height: 100%; background: #00b0ff; width: 100%; }
+        
+        /* Hiệu ứng chém và máu */
+        .sword-effect { position: absolute; font-size: 20px; display: none; transform: scaleX(-1); }
+        .blood { position: absolute; width: 5px; height: 5px; background: #d32f2f; border-radius: 50%; animation: splash 0.3s ease-out forwards; }
+        @keyframes splash {
+            0% { transform: translate(0, 0) scale(1); opacity: 1; }
+            100% { transform: translate(var(--bx), var(--by)) scale(0.5); opacity: 0; }
+        }
+        #game-over-screen { position: absolute; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 10; }
     </style>
 </head>
 <body>
 
     <div id="score-board">Điểm tiêu diệt: <span id="score">0</span></div>
-    <canvas id="gameCanvas" width="400" height="300"></canvas>
+    
+    <div id="game-arena">
+        <div id="game-over-screen">
+            <h2 style="color: #ff1744; margin: 0;">BẠN ĐÃ BỊ HẠ GỤC!</h2>
+            <p style="font-size: 14px; margin: 10px 0 0 0;">Nhấn nút Kiếm ⚔️ để hồi sinh</p>
+        </div>
+        
+        <!-- Người que (Player) -->
+        
+            <div class="hp-bar-bg"><div id="player-hp" class="hp-bar-fill"></div></div>
+            🥷<div id="sword" class="sword-effect" style="left: 20px; top: 0px;">🗡️</div>
+        </div>
 
+        <!-- Các con Zombie -->
+        
+            <div class="hp-bar-bg"><div id="zombie1-hp" class="hp-bar-fill" style="background:#00e676;"></div></div>🧟
+        </div>
+        
+            <div class="hp-bar-bg"><div id="zombie2-hp" class="hp-bar-fill" style="background:#00e676;"></div></div>🧟
+        </div>
+    </div>
+
+    <!-- Nút điều khiển -->
     <div class="controls">
         <button class="btn empty"></button>
         <button class="btn" id="btn-up">▲</button>
@@ -38,108 +73,111 @@ game_html = """
     </div>
 
     <script>
-        const canvas = document.getElementById("gameCanvas");
-        const ctx = canvas.getContext("2d");
+        const pElem = document.getElementById("player");
+        const z1Elem = document.getElementById("zombie1");
+        const z2Elem = document.getElementById("zombie2");
+        const sword = document.getElementById("sword");
+        const arena = document.getElementById("game-arena");
+        const goScreen = document.getElementById("game-over-screen");
 
-        const player = { x: 80, y: 150, size: 20, hp: 100, maxHp: 100, speed: 12, isAttacking: false };
-        
-        let zombies = [];
-        let particles = [];
+        let p = { x: 50, y: 110, hp: 100 };
+        let z1 = { x: 300, y: 50, hp: 60, active: true, speed: 1.5 };
+        let z2 = { x: 300, y: 160, hp: 60, active: true, speed: 1.2 };
         let score = 0;
         let gameOver = false;
 
-        function spawnZombie() {
-            if(zombies.length  {
-                if (zombie.x > player.x) zombie.x -= zombie.speed;
-                else zombie.x += zombie.speed;
-                
-                if (zombie.y > player.y) zombie.y -= zombie.speed / 2;
-                else zombie.y += zombie.speed / 2;
+        // Cơ chế Zombie tự động dí đuổi theo người que mỗi 0.15 giây công bằng ổn định
+        function zombieAI() {
+            if (gameOver) return;
 
-                let dist = Math.hypot(player.x - zombie.x, player.y - zombie.y);
-                if (dist < player.size + zombie.size - 10) {
-                    player.hp -= 0.3; 
-                    if (player.hp <= 0) {
-                        player.hp = 0;
-                        gameOver = true;
-                    }
+            [ {e: z1Elem, d: z1}, {e: z2Elem, d: z2} ].forEach(z => {
+                if (!z.d.active) return;
+                
+                if (z.d.x > p.x) z.d.x -= z.d.speed;
+                else z.d.x += z.d.speed;
+                
+                if (z.d.y > p.y) z.d.y -= z.d.speed;
+                else z.d.y += z.d.speed;
+
+                z.e.style.left = z.d.x + "px";
+                z.e.style.top = z.d.y + "px";
+
+                // Kiểm tra va chạm làm người que mất máu
+                let dist = Math.hypot(p.x - z.d.x, p.y - z.d.y);
+                if (dist < 25) {
+                    p.hp -= 2;
+                    if (p.hp <= 0) { p.hp = 0; gameOver = true; goScreen.style.display = "flex"; }
+                    document.getElementById("player-hp").style.width = p.hp + "%";
                 }
             });
-
-            particles.forEach((p, idx) => {
-                p.x += p.vx;
-                p.y += p.vy;
-                p.vy += 0.12;
-                p.life--;
-                if(p.life <= 0) particles.splice(idx, 1);
-            });
         }
+        setInterval(zombieAI, 150);
 
-        function draw() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            particles.forEach(p => {
-                ctx.fillStyle = `rgba(211, 47, 47, ${p.life / 25})`;
-                ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fill();
-            });
-
-            drawEntity(player, false);
-            zombies.forEach(zombie => drawEntity(zombie, true));
-
-            if (gameOver) {
-                ctx.fillStyle = "rgba(0,0,0,0.85)";
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = "#ff1744";
-                ctx.font = "bold 24px Arial";
-                ctx.fillText("BẠN ĐÃ BỊ HẠ GỤC!", canvas.width/2 - 105, canvas.height/2);
-                ctx.font = "16px Arial";
-                ctx.fillStyle = "#fff";
-                ctx.fillText("Nhấn nút Kiếm ⚔️ để hồi sinh chiến đấu!", canvas.width/2 - 130, canvas.height/2 + 35);
+        // Hiệu ứng phun máu đỏ tung tóe
+        function spawnBlood(x, y) {
+            for (let i = 0; i < 8; i++) {
+                let b = document.createElement("div");
+                b.className = "blood";
+                b.style.left = (x + 10) + "px";
+                b.style.top = (y + 15) + "px";
+                b.style.setProperty("--bx", ((Math.random() - 0.2) * 40) + "px");
+                b.style.setProperty("--by", ((Math.random() - 0.5) * 40) + "px");
+                arena.appendChild(b);
+                setTimeout(() => b.remove(), 300);
             }
         }
 
-        function gameLoop() {
-            update();
-            draw();
-            requestAnimationFrame(gameLoop);
-        }
+        // Điều khiển Người que di chuyển
+        document.getElementById("btn-up").addEventListener("click", () => { if(p.y > 10 && !gameOver) { p.y -= 20; pElem.style.top = p.y + "px"; } });
+        document.getElementById("btn-down").addEventListener("click", () => { if(p.y < 210 && !gameOver) { p.y += 20; pElem.style.top = p.y + "px"; } });
+        document.getElementById("btn-left").addEventListener("click", () => { if(p.x > 10 && !gameOver) { p.x -= 20; pElem.style.left = p.x + "px"; } });
+        document.getElementById("btn-right").addEventListener("click", () => { if(p.x < 320 && !gameOver) { p.x += 20; pElem.style.left = p.x + "px"; } });
 
-        document.getElementById("btn-up").addEventListener("click", () => { if(player.y > 35) player.y -= player.speed; });
-        document.getElementById("btn-down").addEventListener("click", () => { if(player.y < canvas.height - 35) player.y += player.speed; });
-        document.getElementById("btn-left").addEventListener("click", () => { if(player.x > 25) player.x -= player.speed; });
-        document.getElementById("btn-right").addEventListener("click", () => { if(player.x < canvas.width - 25) player.x += player.speed; });
-        
-        const atkBtn = document.getElementById("btn-atk");
-        atkBtn.addEventListener("click", () => {
+        // Tấn công / Hồi sinh khi nhấn nút Kiếm
+        document.getElementById("btn-atk").addEventListener("click", () => {
             if (gameOver) {
-                player.hp = 100; zombies = []; particles = []; score = 0;
-                document.getElementById("score").innerText = score;
-                gameOver = false; return;
+                p = { x: 50, y: 110, hp: 100 };
+                z1 = { x: 300, y: 50, hp: 60, active: true, speed: 1.5 };
+                z2 = { x: 300, y: 160, hp: 60, active: true, speed: 1.2 };
+                score = 0; document.getElementById("score").innerText = score;
+                document.getElementById("player-hp").style.width = "100%";
+                document.getElementById("zombie1-hp").style.width = "100%";
+                document.getElementById("zombie2-hp").style.width = "100%";
+                z1Elem.style.display = "block"; z2Elem.style.display = "block";
+                pElem.style.left = "50px"; pElem.style.top = "110px";
+                goScreen.style.display = "none"; gameOver = false; return;
             }
-            
-            player.isAttacking = true;
-            setTimeout(() => { player.isAttacking = false; }, 100);
 
-            zombies.forEach((zombie, index) => {
-                let dist = Math.hypot(player.x - zombie.x, player.y - zombie.y);
-                if (dist < player.size + zombie.size + 25) {
-                    zombie.hp -= 20;
-                    createBloodEffect(zombie.x, zombie.y);
+            // Hiện cây kiếm chém ra
+            sword.style.display = "block";
+            setTimeout(() => sword.style.display = "none", 150);
 
-                    if(zombie.hp <= 0) {
-                        zombies.splice(index, 1);
-                        score += 1;
-                        document.getElementById("score").innerText = score;
+            // Kiểm tra khoảng cách chém trúng Zombie
+            [ {d: z1, e: z1Elem, h: "zombie1-hp"}, {d: z2, e: z2Elem, h: "zombie2-hp"} ].forEach(z => {
+                if (!z.d.active) return;
+                let dist = Math.hypot(p.x - z.d.x, p.y - z.d.y);
+                if (dist < 45) { // Tầm chém kiếm
+                    z.d.hp -= 20;
+                    spawnBlood(z.d.x, z.d.y);
+                    document.getElementById(z.h).style.width = (z.d.hp / 60 * 100) + "%";
+                    
+                    if (z.d.hp <= 0) {
+                        z.d.active = false; z.e.style.display = "none";
+                        score += 1; document.getElementById("score").innerText = score;
+                        
+                        // Tự hồi sinh zombie mới ở bên phải sau khi chết
+                        setTimeout(() => {
+                            z.d.hp = 60; z.d.x = 330; z.d.y = Math.random() * 200 + 20;
+                            z.d.active = true; z.e.style.display = "block";
+                            document.getElementById(z.h).style.width = "100%";
+                        }, 1500);
                     }
                 }
             });
         });
-
-        gameLoop();
     </script>
 </body>
 </html>
 """
 
 components.html(game_html, height=450)
-
